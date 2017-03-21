@@ -1,0 +1,34 @@
+#ButterKnife控件无响应
+本文主要说明一些在使用这个框架中的控件无响应的细节：
+##1. AndroidStudio中添加ButterKnife
+File->Settings->Plugin，输入butter搜索，并安装重启AndroidStudio.
+<center>![Alt text](./butterkinfe_install.PNG)</center>
+<center>安装ButterKnife插件</center>
+这时在我们的工程的app下的build.gradle中添加上了下面一段代码：
+
+```
+compile 'com.jakewharton:butterknife:8.4.0'
+```
+<center>![Alt text](./butterknife_code1.PNG)</center>
+##2. 在工程中添加ButterKnife的配置信息
+在1中我们已经在AndroidStudio中添加了ButterKnife插件，下面就在此基础上继续配置ButterKnife并使用这个view注入框架。
+###2.1. 配置project中的build.gradle
+
+```
+classpath 'com.neenbedankt.gradle.plugins:android-apt:1.8'
+```
+<center>![Alt text](./butterknife_code3.PNG)</center>
+###2.2. 配置app中的build.gradle
+首先是在文件头添加apply plugin信息：
+
+```
+apply plugin: 'com.neenbedankt.android-apt'
+```
+然后在1中自动添加的代码下面再手动添加下面一行代码：
+
+```
+apt 'com.jakewharton:butterknife-compiler:8.4.0'
+```
+<center>![Alt text](./butterknife_code2.PNG)</center>
+如果没有配置好这些信息，在AndroidStudio中使用ButterKnife时可能会出现控件无响应的情况。至于ButterKnife的方便之处与具体用法，这里就不在赘述，建议到github上clone下它的sample来参照使用。
+https://github.com/mengdd/AndroidButterKnifeSample
