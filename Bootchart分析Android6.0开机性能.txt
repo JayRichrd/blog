@@ -1,0 +1,189 @@
+#Bootchart分析Android6.0开机性能
+Bootchart是一个用于Linux启动过程性能分析的开源软件工具，以可视化的方式对GUN/Linux的开机启动过程进行性能分析，包括资源的使用（如CPU，磁盘等），各进程的执行时间信息等。根据分析结果，确定系统启动的性能瓶颈，制定相应的优化策略。由于Android系统是基于Linux的，所以我们可以使用Bootchart来分析开机性能。实际上在Android中已经集成了Bootchart这一开源工具供我们使用，只是在Android5.1之前默认是没有编译进系统的，需要我们手动编译进去使用，关于如何在Android5.1以下的系统使用Bootchart网上有很攻略，这里就不在赘述，这里可以参考这篇帖子-[《bootchart工具在Android系统开机测量中的应用》](http://blog.csdn.net/harry_helei/article/details/7281356)，来实现在Android5.1以下的系统中集成Bootchart，然后手机开机日志和数据并利用收集的数据生成可视化图片，供我们分析Android的开机性能。
+从Android6.0开始，Google已经在Android系统中默认集成了Bootchart。使用adb shell命令进入Android虚拟机，我们可以在data目录下查看到bootchart这一子目录：
+<center>![Alt text](./bootchart_directory.png)</center>
+因为使用它来进行性能分析时，本身就是比较耗性能的。所以默认是没有打开Bootchart开关的，我们也可以进入bootchart目录查看，里面什么也没有。
+##1. 性能数据收集
+###1.1.打开Bootchart
+我们使用下面的命名来打开Bootchart来收集开机性能数据（主要就是记录日志文件）：
+
+```
+//在data/bootchart/目录中新建start文件
+adb shell 'touch /data/bootchart/start'
+/*
+* 在start文件中写入采用时间timeout=120s
+* 这里的时间可以自定义，通过查看源代码可知最长时间不能超过10*60 s
+ */
+adb shell 'echo 120 > /data/bootchart/start'
+//在data/bootchart/目录中新建stop文件
+adb shell 'touch /data/bootchart/stop'
+//在stop文件中写入1标记，用于停止采集数据
+adb shell 'echo 1 > /data/bootchart/stop'
+```
+<center>![Alt text](./bootcahrt_set.png)</center>
+###1.2.收集开机性能数据
+开启Bootchart后，我们就可以重启手机并收集数据了。待手机开机后，我们再进入/data/bootchart/目录下，就发现其中包含如下文件（header、kernel_pacct、proc_diskstats.log、proc_ps.log、proc_stat.log）：
+<center>![Alt text](./bootchart_data.png)</center>
+##2.开机性能数据处理
+得到上述的开机性能数据后，我们需要在Linux环境下打包这些数据并做可视化处理输出性能分析图表。为此Google已经给我们在源码/system/core/init/目录下写了一个grab-bootchart.sh脚本，专门用来处理这些数据并做可视化处理：
+
+```
+TMPDIR=/tmp/android-bootchart
+rm -rf $TMPDIR
+mkdir -p $TMPDIR
+
+LOGROOT=/data/bootchart
+TARBALL=bootchart.tgz
+
+FILES="header proc_stat.log proc_ps.log proc_diskstats.log kernel_pacct"
+
+for f in $FILES; do
+    adb "${@}" pull $LOGROOT/$f $TMPDIR/$f 2>&1 > /dev/null
+done
+(cd $TMPDIR && tar -czf $TARBALL $FILES)
+bootchart ${TMPDIR}/${TARBALL}
+gnome-open ${TARBALL%.tgz}.png
+echo "Clean up ${TMPDIR}/ and ./${TARBALL%.tgz}.png when done"
+```
+###2.1.配置Linux环境
+参照上面Google的脚本，我们在自己的Linux环境中处理这些日志数据，首先需要在Linux中安装bootchart、pybootchartgui和gnome-open工具：
+
+```
+sudo apt-get install bootchart  
+sudo apt-get install pybootchartgui
+sudo apt-get install gnome-open 
+```
+###2.2.处理数据
+在Linux中安装好必备软件后，将手机/data/bootchart/中的日志数据导入到Linux环境中，并并参照Google的处理脚本，根据自己实际情况写了一个处理脚本handle—bootchart.sh
+
+```
+TARBALL=bootchart.tgz
+FILES="header proc_stat.log proc_ps.log proc_diskstats.log kernel_pacct"
+tar -czf $TARBALL $FILES
+bootchart $TARBALL
+gnome-open ${TARBALL%.tgz}.png
+```
+<center>![Alt text](./bootchart-handle.png)</center>
+最终将分析的结果生成可视化的图片，如下所示：
+![Alt text](./bootchart.png)
+通过图片中的时间线timeline上各个进程的启动、IO处理等，我们大致可以分析在开机过程中哪个部分比较耗时，待查找出后去重点优化。
+从Android6.0开始，Google还给我们提供了一个比较脚本/system/core/init/compare-bootcharts.py用来比较两次开机的数据。以我上面的Linux环境为基础，将这个python脚本导入Linux环境中，打开该python脚本：
+
+```
+def main():
+    print "sys.argv[1]:" + sys.argv[1]
+    print "sys.argv[2]:" + sys.argv[2]
+    if len(sys.argv) != 3:
+        print "Usage: %s base_bootchart_dir exp_bootchart_dir" % sys.argv[0]
+        sys.exit(1)
+
+    process_map1 = {}
+    process_map2 = {}
+    parse_proc_file(sys.argv[1], process_map1, jiffy_to_wallclock)
+    parse_proc_file(sys.argv[2], process_map2)
+    analyze_process_maps(process_map1, process_map2, jiffy_to_wallclock)
+
+if __name__ == "__main__":
+    main()
+```
+我们这里需要将两次打包得到的两个压缩包bootchart.tgz分别保存在base_bootchart_dir和exp_bootchart_dir目录中，然后运行下面的命令来执行脚本：
+
+```
+./compare-bootcharts.py base_bootchart_dir exp_bootchart_dir
+```
+得到两个比较的结果如下图所示：
+![Alt text](./bootchart-compare.png)
+这个脚本中只比较了几个重要的核心进程（init、surfacefliger、bootanimation、zygote64、zygote）的启动时间。例如两次的bootanimation启动时间都是5530ms，因此第二次比第一次+0ms。
+ps：在我的Linux环境使用这个脚本时遇到了如下几个问题，在此贴出来仅供大家参考
+1、Linux环境中软件或者对应的包没有，导致运行脚本时报错
+![Alt text](./bootchart-compare-error1.png)
+这是没有安装imagemagick和graphicsmagick-imagemagick-compat的原因，按照提示使用apt-get install<选定的软件包>命令安装对应的软件。
+2、注意Linux环境下python解析器的安装位置与脚本中指定的解析器位置是否一致，一般我们写的python脚本第一行是：
+
+```
+#!/usr/bin/python
+```
+这就限定死了解析器的位置，而Google的这个解析脚本中的第一行是：
+
+```
+#!/usr/bin/env python
+```
+总之要让脚本找到对应的解析器来解析这个python脚本，至于这两种写法的区别，参考博客-[《#!/usr/bin/env python与#!/usr/bin/python的区别》](http://blog.csdn.net/wh_19910525/article/details/8040494)，推荐使用#!/usr/bin/env python这种写法。
+3、Linux下python脚本的文档格式使用Unix，不要使用Windows。
+**参考：**
+其中涉及到的源码文件和说明文件都在system/core/init/目录下
+bootchart.cpp
+compare-bootcharts.py
+grab-bootchart.sh
+readme.txt
+##3.部分源码解读
+* bootchart.cpp
+
+```
+……
+// Max polling time in seconds.
+static const int BOOTCHART_MAX_TIME_SEC = 10*60;
+……
+static int bootchart_init() {
+    int timeout = 0;
+	//从start文件中读取采集时间并赋给timeout
+    std::string start;
+    android::base::ReadFileToString(LOG_STARTFILE, &start);
+    if (!start.empty()) {
+        timeout = atoi(start.c_str());
+    } else {
+        // When running with emulator, androidboot.bootchart=<timeout>
+        // might be passed by as kernel parameters to specify the bootchart
+        // timeout. this is useful when using -wipe-data since the /data
+        // partition is fresh.
+        std::string cmdline;
+        const char* s;
+        android::base::ReadFileToString("/proc/cmdline", &cmdline);
+#define KERNEL_OPTION  "androidboot.bootchart="
+        if ((s = strstr(cmdline.c_str(), KERNEL_OPTION)) != NULL) {
+            timeout = atoi(s + sizeof(KERNEL_OPTION) - 1);
+        }
+    }
+    if (timeout == 0)
+        return 0;
+	//最长的采集时间不能超过BOOTCHART_MAX_TIME_SEC=10*60s
+    if (timeout > BOOTCHART_MAX_TIME_SEC)
+        timeout = BOOTCHART_MAX_TIME_SEC;
+        ……
+ }
+
+static int bootchart_step() {
+    do_log_file(log_stat,   "/proc/stat");
+    do_log_file(log_disks,  "/proc/diskstats");
+    do_log_procs(log_procs);
+	//当stop文件中包含1时，就停止采集
+    // Stop if /data/bootchart/stop contains 1.
+    std::string stop;
+    if (android::base::ReadFileToString(LOG_STOPFILE, &stop) && stop == "1") {
+        return -1;
+    }
+
+    return 0;
+}
+```
+##4.to do
+* 在Android7.0中，当我们按照Android6.0的方式打开Bootchart采集数据并关机重启时，会出现系统起不来的情况，参考了网上的帖子-[《Android7.0 bootchart工具使用说明》](http://blog.csdn.net/fu_kevin0606/article/details/53928748)，是由于bootchart.cpp文件中存在bug。
+* 按照上面的方法打开Bootchart采集数据并分析的方案，不能使用在恢复出厂设置或者手机刚烧录好版本后第一次开机的情况，而往往在这种情况下，手机开机比较慢，也是我们重点需要优化的。但通过查看源代码，我们可以在bootchart.cpp中写死一个timeout值，然后重新编译进系统刷机。
+**before：**
+int timeout = 0;
+**after：**
+int timeout = 120;
+* 由于Android是架构在Linux虚拟机上的，因此对Android的开机优化与Linux虚拟机有着很大的联系。通过上面得出的图表分析出哪些耗时进程，然后去重点优化便可提升Android的开机速度。下面是几篇比较好的使用Bootchart来优化Android开机时间的帖子，仅供参考：
+《Android/Linux boot time分析优化》http://www.cnblogs.com/arnoldlu/p/6266331.html
+《android启动速度优化》http://blog.chinaunix.net/uid-21564437-id-3954560.html
+《Android开机速度优化简单回顾》http://blog.csdn.net/freshui/article/details/53700771
+《Android bootchart分析》http://blog.csdn.net/weiqifa0/article/details/48996033
+* Android O中对开机速度做了一个很大的提升，以下是官方给出的一张开机时间线图：
+<center>![Alt text](./boot-compare.png)</center>
+从Android N的27.6s到Android O的13.3s，可以看出Google在Android O上对开机时间做了很大的优化。我们要在Android O中打开Bootchart并分析开机时间，使用如下命令：
+
+```
+//To enable bootchart:
+adb shell 'touch /data/bootchart/enabled'
+adb reboot
+```
