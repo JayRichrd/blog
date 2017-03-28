@@ -1,0 +1,52 @@
+#Systrace在Android开机流程中的使用
+Systrace是Android4.1中新增的性能数据采样和分析工具，它可帮助开发者收集Android关键子系统（如surfaceflinger、WindowManagerService等Framework部分关键模块、服务）的运行信息，从而帮助开发者更直观的分析系统瓶颈，改进性能。Systrace的功能包括跟踪系统的I/O操作、内核工作队列、CPU负载以及Android各个子系统的运行状况等。具体的介绍可以点击查看[官方文档](https://developer.android.com/studio/profile/systrace-commandline.html)，文档中更多的还是使用systrace来分析应用app的性能。下面来简单说一下如何利用systrace来抓取开机boot-up的trace日志，并将日志可视化出来，以便做开机性能分析。
+##1.开启Systrace
+在系统中开启sysrace：
+* frameworks/native/atrace/atrace.rc
+
+```
+ # Tracing disabled by default
+ - write /sys/kernel/debug/tracing/tracing_on 0
+ + #write /sys/kernel/debug/tracing/tracing_on 0
+```
+将write /sys/kernel/debug/tracing/tracing_on 0注释掉
+* Device mk file
+在device目录下的<产品>.mk文件中添加一个配置项：
+
+```
++ PRODUCT_PROPERTY_OVERRIDES += debug.atrace.tags.enableflags=802922
+```
+* Device BoardConfig.mk
+同理在device目录中的<产品>目录中的BoardConfig.mk中追加如下配置：
+//为分析具体的I/O而增加block和ext4
+```
+BOARD_KERNEL_CMDLINE := ... trace_buf_size=64M trace_event=sched_wakeup,sched_switch,sched_blocked_reason,sched_cpu_hotplug
+```
+* Device specific init.rc
+在init.rc中添加如下配置信息
+
+```
+# to stop tracing on boot complete
++ on property:sys.boot_completed=1
++ write /d/tracing/tracing_on 0
++ write /d/tracing/events/ext4/enable 0
++ write /d/tracing/events/block/enable 0
+```
+##2.获取trace数据
+在1中配置好系统的systrace后，重启手机。并用adb shell命令进入/d/tracing/目录：
+<center>![](./data.png)</center>
+使用adb pull命令将trace导出，查看其中的内容可知当中记录了各种日志信息：
+<center>![@导出trace](./pull.png)</center>
+<center>![@trace内容](./trace.png)</center>
+##3.处理trace数据
+将2中获取的trace数据导入到Linux环境下，并假设在Linux环境下已经部署了一套Android源代码（因为将使用Android源码中的某python脚本来处理trace数据）。使用Android源码中的trace2html(/external/chromium-trace/catapult/tracing/bin/trace2html)个python脚本将trace数据转换成html：
+
+```
+//使用trace2html脚本将trace数据转换成boot_trace.html输出
+./trace2html trace --output boot_trace.html
+```
+![@脚本处理数据](./handle.png)
+##4.查看数据
+将3中生成的html文件用浏览器打开：
+![生成结果](./result.png)
+后续解读这张图表信息，分析开机流程……
